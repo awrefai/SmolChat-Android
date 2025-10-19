@@ -20,6 +20,7 @@ import android.util.Log
 import io.shubham0204.smollm.SmolLM
 import io.shubham0204.smollmandroid.data.AppDB
 import io.shubham0204.smollmandroid.data.Chat
+import io.shubham0204.smollmandroid.data.ChatMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -72,12 +73,13 @@ class SmolLMManager(
                     }
                     if (!chat.isTask) {
                         appDB.getMessagesForModel(chat.id).forEach { message ->
+                            val content = message.asModelInput()
                             if (message.isUserMessage) {
-                                instance.addUserMessage(message.message)
-                                LOGD("User message added: ${message.message}")
+                                instance.addUserMessage(content)
+                                LOGD("User message added: $content")
                             } else {
-                                instance.addAssistantMessage(message.message)
-                                LOGD("Assistant message added: ${message.message}")
+                                instance.addAssistantMessage(content)
+                                LOGD("Assistant message added: $content")
                             }
                         }
                     }
@@ -154,5 +156,21 @@ class SmolLMManager(
         if (job.isActive) {
             job.cancel()
         }
+    }
+}
+
+private fun ChatMessage.asModelInput(): String {
+    if (attachments.isEmpty()) {
+        return message
+    }
+    val attachmentContext =
+        attachments.joinToString(separator = "\n") { attachment ->
+            "[Attachment: ${attachment.title}] ${attachment.summary}"
+        }
+    return buildString {
+        append(message)
+        append("\n\n")
+        append("Attachment context:\n")
+        append(attachmentContext)
     }
 }

@@ -1,8 +1,9 @@
 plugins {
     id("java-library")
     alias(libs.plugins.jetbrains.kotlin.jvm)
-    kotlin("plugin.serialization") version "2.1.0"
 }
+
+apply(plugin = "org.jetbrains.kotlin.plugin.serialization")
 
 val ktorVersion = "3.0.2"
 val kotlinSerializationVersion = "1.7.3"

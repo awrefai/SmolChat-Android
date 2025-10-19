@@ -9,6 +9,9 @@ pluginManagement {
                 includeGroupByRegex("androidx.*")
             }
         }
+        maven { url = uri("https://maven.pkg.jetbrains.space/kotlin/p/kotlin/dev") }
+        maven { url = uri("https://maven.pkg.jetbrains.space/kotlin/p/kotlin/bootstrap") }
+        maven { url = uri("https://maven.pkg.jetbrains.space/kotlin/p/kotlin/releases") }
         mavenCentral()
         gradlePluginPortal()
     }

@@ -20,14 +20,17 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.text.Spanned
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -51,6 +54,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyItemScope
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -67,6 +72,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
@@ -90,9 +96,11 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -100,14 +108,20 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import coil.compose.AsyncImage
 import compose.icons.FeatherIcons
+import compose.icons.feathericons.FileText
+import compose.icons.feathericons.Image
 import compose.icons.feathericons.Menu
 import compose.icons.feathericons.MoreVertical
 import compose.icons.feathericons.Send
 import compose.icons.feathericons.StopCircle
 import compose.icons.feathericons.User
+import compose.icons.feathericons.X
 import io.shubham0204.smollmandroid.R
+import io.shubham0204.smollmandroid.data.AttachmentType
 import io.shubham0204.smollmandroid.data.Chat
+import io.shubham0204.smollmandroid.data.StoredAttachment
 import io.shubham0204.smollmandroid.data.Task
 import io.shubham0204.smollmandroid.ui.components.AppBarTitleText
 import io.shubham0204.smollmandroid.ui.components.MediumLabelText
@@ -205,6 +219,112 @@ class ChatActivity : ComponentActivity() {
         super.onStop()
         modelUnloaded = viewModel.unloadModel()
         LOGD("onStop() called - model unloaded result: $modelUnloaded")
+    }
+}
+
+@Composable
+private fun AttachmentPreviewList(
+    attachments: List<StoredAttachment>,
+    isUserMessage: Boolean,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = if (isUserMessage) Alignment.End else Alignment.Start,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        attachments.forEach { attachment ->
+            AttachmentPreview(attachment, isUserMessage)
+        }
+    }
+}
+
+@Composable
+private fun AttachmentPreview(
+    attachment: StoredAttachment,
+    isUserMessage: Boolean,
+) {
+    val context = LocalContext.current
+    val uri = remember(attachment.uri) { Uri.parse(attachment.uri) }
+    val backgroundColor =
+        if (isUserMessage) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHighest
+        }
+    val contentColor =
+        if (isUserMessage) {
+            MaterialTheme.colorScheme.onPrimaryContainer
+        } else {
+            MaterialTheme.colorScheme.onSurface
+        }
+    Surface(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .clickable {
+                    runCatching {
+                        val intent =
+                            Intent(Intent.ACTION_VIEW).apply {
+                                setDataAndType(
+                                    uri,
+                                    if (attachment.type == AttachmentType.IMAGE) {
+                                        "image/*"
+                                    } else {
+                                        "application/pdf"
+                                    },
+                                )
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            }
+                        context.startActivity(intent)
+                    }
+                },
+        color = backgroundColor,
+        tonalElevation = 2.dp,
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector =
+                        if (attachment.type == AttachmentType.IMAGE) {
+                            FeatherIcons.Image
+                        } else {
+                            FeatherIcons.FileText
+                        },
+                    contentDescription = null,
+                    tint = contentColor,
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = attachment.title,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = contentColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            if (attachment.type == AttachmentType.IMAGE) {
+                AsyncImage(
+                    model = uri,
+                    contentDescription = attachment.title,
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .height(140.dp)
+                            .clip(RoundedCornerShape(10.dp)),
+                    contentScale = ContentScale.Crop,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+            Text(
+                text = attachment.summary,
+                style = MaterialTheme.typography.bodySmall,
+                color = contentColor,
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
@@ -433,16 +553,17 @@ private fun ColumnScope.MessagesList(
                     if (!messages.last().isUserMessage) {
                         viewModel.deleteMessage(messages.last().id)
                     }
-                    viewModel.appDB.addUserMessage(chatId, newMessage)
+                    viewModel.appDB.addUserMessage(chatId, newMessage, chatMessage.attachments)
                     viewModel.unloadModel()
                     viewModel.loadModel(onComplete = {
                         if (it == ModelLoadingState.SUCCESS) {
-                            viewModel.sendUserQuery(newMessage, addMessageToDB = false)
+                            viewModel.sendUserQuery(newMessage, addMessageToDB = false, persistedAttachments = chatMessage.attachments)
                         }
                     })
                 },
                 // allow editing the message only if it is the last message in the list
                 allowEditing = (i == lastUserMessageIndex),
+                attachments = chatMessage.attachments,
             )
         }
         if (isGeneratingResponse) {
@@ -459,6 +580,7 @@ private fun ColumnScope.MessagesList(
                             // Not applicable as allowEditing is set to False
                         },
                         allowEditing = false,
+                        attachments = emptyList(),
                     )
                 } else {
                     Row(
@@ -502,6 +624,7 @@ private fun LazyItemScope.MessageListItem(
     onMessageEdited: (String) -> Unit,
     modifier: Modifier = Modifier,
     allowEditing: Boolean,
+    attachments: List<StoredAttachment>,
 ) {
     var isEditing by remember { mutableStateOf(false) }
     val context = LocalContext.current
@@ -514,6 +637,10 @@ private fun LazyItemScope.MessageListItem(
         ) {
             Spacer(modifier = Modifier.width(8.dp))
             Column {
+                if (attachments.isNotEmpty()) {
+                    AttachmentPreviewList(attachments, isUserMessage = false)
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
                 ChatMessageText(
                     // to make pointerInput work in MarkdownText use disableLinkMovementMethod
                     // https://github.com/jeziellago/compose-markdown/issues/85#issuecomment-2184040304
@@ -570,6 +697,10 @@ private fun LazyItemScope.MessageListItem(
             horizontalArrangement = Arrangement.End,
         ) {
             Column(horizontalAlignment = Alignment.End) {
+                if (attachments.isNotEmpty()) {
+                    AttachmentPreviewList(attachments, isUserMessage = true)
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
                 var message by remember { mutableStateOf(messageStr.toString()) }
                 if (isEditing) {
                     TextField(
@@ -662,6 +793,32 @@ private fun MessageInput(
     } else {
         var questionText by remember { mutableStateOf(viewModel.questionTextDefaultVal ?: "") }
         val keyboardController = LocalSoftwareKeyboardController.current
+        val context = LocalContext.current
+        val attachments by viewModel.pendingAttachments.collectAsStateWithLifecycle()
+        val imagePickerLauncher =
+            rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                uri?.let {
+                    runCatching {
+                        context.contentResolver.takePersistableUriPermission(
+                            it,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                        )
+                    }
+                    viewModel.addImageAttachment(it)
+                }
+            }
+        val documentPickerLauncher =
+            rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                uri?.let {
+                    runCatching {
+                        context.contentResolver.takePersistableUriPermission(
+                            it,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                        )
+                    }
+                    viewModel.addPdfAttachment(it)
+                }
+            }
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center,
@@ -680,71 +837,141 @@ private fun MessageInput(
                 )
             }
             AnimatedVisibility(modelLoadingState == ModelLoadingState.SUCCESS) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    TextField(
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .weight(1f),
-                        value = questionText,
-                        onValueChange = { questionText = it },
-                        shape = RoundedCornerShape(16.dp),
-                        colors =
-                            TextFieldDefaults.colors(
-                                disabledTextColor = Color.Transparent,
-                                focusedIndicatorColor = Color.Transparent,
-                                unfocusedIndicatorColor = Color.Transparent,
-                                disabledIndicatorColor = Color.Transparent,
-                            ),
-                        placeholder = {
-                            Text(
-                                text = stringResource(R.string.chat_ask_question),
-                            )
-                        },
-                        keyboardOptions =
-                            KeyboardOptions.Default.copy(
-                                capitalization = KeyboardCapitalization.Sentences,
-                                imeAction = ImeAction.Go,
-                            ),
-                        keyboardActions =
-                            KeyboardActions(onGo = {
-                                keyboardController?.hide()
-                                viewModel.sendUserQuery(questionText)
-                                questionText = ""
-                            }),
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    if (isGeneratingResponse) {
-                        Box(contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator()
-                            IconButton(onClick = { viewModel.stopGeneration() }) {
-                                Icon(FeatherIcons.StopCircle, contentDescription = "Stop")
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    if (attachments.isNotEmpty()) {
+                        PendingAttachmentsRow(
+                            attachments = attachments,
+                            onRemove = { id -> viewModel.removePendingAttachment(id) },
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        IconButton(onClick = { imagePickerLauncher.launch(arrayOf("image/*")) }) {
+                            Icon(imageVector = FeatherIcons.Image, contentDescription = "Attach image")
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
+                        IconButton(onClick = { documentPickerLauncher.launch(arrayOf("application/pdf")) }) {
+                            Icon(imageVector = FeatherIcons.FileText, contentDescription = "Attach PDF")
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        TextField(
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .weight(1f),
+                            value = questionText,
+                            onValueChange = { questionText = it },
+                            shape = RoundedCornerShape(16.dp),
+                            colors =
+                                TextFieldDefaults.colors(
+                                    disabledTextColor = Color.Transparent,
+                                    focusedIndicatorColor = Color.Transparent,
+                                    unfocusedIndicatorColor = Color.Transparent,
+                                    disabledIndicatorColor = Color.Transparent,
+                                ),
+                            placeholder = {
+                                Text(
+                                    text = stringResource(R.string.chat_ask_question),
+                                )
+                            },
+                            keyboardOptions =
+                                KeyboardOptions.Default.copy(
+                                    capitalization = KeyboardCapitalization.Sentences,
+                                    imeAction = ImeAction.Go,
+                                ),
+                            keyboardActions =
+                                KeyboardActions(onGo = {
+                                    keyboardController?.hide()
+                                    viewModel.sendUserQuery(questionText)
+                                    questionText = ""
+                                }),
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        if (isGeneratingResponse) {
+                            Box(contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator()
+                                IconButton(onClick = { viewModel.stopGeneration() }) {
+                                    Icon(FeatherIcons.StopCircle, contentDescription = "Stop")
+                                }
+                            }
+                        } else {
+                            IconButton(
+                                enabled = questionText.isNotEmpty(),
+                                modifier =
+                                    Modifier.background(
+                                        MaterialTheme.colorScheme.primaryContainer,
+                                        CircleShape,
+                                    ),
+                                onClick = {
+                                    keyboardController?.hide()
+                                    viewModel.sendUserQuery(questionText)
+                                    questionText = ""
+                                },
+                            ) {
+                                Icon(
+                                    imageVector = FeatherIcons.Send,
+                                    contentDescription = "Send text",
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                )
                             }
                         }
-                    } else {
-                        IconButton(
-                            enabled = questionText.isNotEmpty(),
-                            modifier =
-                                Modifier.background(
-                                    MaterialTheme.colorScheme.primaryContainer,
-                                    CircleShape,
-                                ),
-                            onClick = {
-                                keyboardController?.hide()
-                                viewModel.sendUserQuery(questionText)
-                                questionText = ""
-                            },
-                        ) {
-                            Icon(
-                                imageVector = FeatherIcons.Send,
-                                contentDescription = "Send text",
-                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PendingAttachmentsRow(
+    attachments: List<PendingAttachment>,
+    onRemove: (Long) -> Unit,
+) {
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        items(attachments, key = { it.id }) { attachment ->
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                tonalElevation = 2.dp,
+                color = MaterialTheme.colorScheme.surfaceContainerHighest,
+            ) {
+                Column(
+                    modifier =
+                        Modifier
+                            .widthIn(max = 220.dp)
+                            .padding(12.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = attachment.title,
+                            style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (attachment.isProcessing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
                             )
+                        } else {
+                            IconButton(onClick = { onRemove(attachment.id) }) {
+                                Icon(FeatherIcons.X, contentDescription = "Remove attachment")
+                            }
                         }
                     }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = attachment.preview ?: stringResource(R.string.chat_attachment_processing),
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
         }

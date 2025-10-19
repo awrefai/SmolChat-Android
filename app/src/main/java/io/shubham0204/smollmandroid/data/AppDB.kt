@@ -5,6 +5,8 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.runBlocking
@@ -13,7 +15,7 @@ import java.util.Date
 
 @Database(
     entities = [Chat::class, ChatMessage::class, LLMModel::class, Task::class, Folder::class],
-    version = 1,
+    version = 2,
 )
 @TypeConverters(Converters::class)
 abstract class AppRoomDatabase : RoomDatabase() {
@@ -38,7 +40,19 @@ class AppDB(
                 context,
                 AppRoomDatabase::class.java,
                 "app-database",
-            ).build()
+            ).addMigrations(MIGRATION_1_2)
+            .build()
+
+    companion object {
+        val MIGRATION_1_2 =
+            object : Migration(1, 2) {
+                override fun migrate(database: SupportSQLiteDatabase) {
+                    database.execSQL("ALTER TABLE ChatMessage ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'")
+                    database.execSQL("ALTER TABLE LLMModel ADD COLUMN modality TEXT NOT NULL DEFAULT 'TEXT'")
+                    database.execSQL("ALTER TABLE LLMModel ADD COLUMN supportsRag INTEGER NOT NULL DEFAULT 0")
+                }
+            }
+    }
 
     /** Get all chats from the database sorted by dateUsed in descending order. */
     fun getChats(): Flow<List<Chat>> = db.chatsDao().getChats()
@@ -122,19 +136,35 @@ class AppDB(
     fun addUserMessage(
         chatId: Long,
         message: String,
+        attachments: List<StoredAttachment> = emptyList(),
     ) = runBlocking(Dispatchers.IO) {
         db
             .chatMessagesDao()
-            .insertMessage(ChatMessage(chatId = chatId, message = message, isUserMessage = true))
+            .insertMessage(
+                ChatMessage(
+                    chatId = chatId,
+                    message = message,
+                    isUserMessage = true,
+                    attachments = attachments,
+                ),
+            )
     }
 
     fun addAssistantMessage(
         chatId: Long,
         message: String,
+        attachments: List<StoredAttachment> = emptyList(),
     ) = runBlocking(Dispatchers.IO) {
         db
             .chatMessagesDao()
-            .insertMessage(ChatMessage(chatId = chatId, message = message, isUserMessage = false))
+            .insertMessage(
+                ChatMessage(
+                    chatId = chatId,
+                    message = message,
+                    isUserMessage = false,
+                    attachments = attachments,
+                ),
+            )
     }
 
     fun deleteMessage(messageId: Long) =
@@ -155,6 +185,8 @@ class AppDB(
         path: String,
         contextSize: Int,
         chatTemplate: String,
+        modality: ModelModality = ModelModality.TEXT,
+        supportsRag: Boolean = false,
     ) = runBlocking(Dispatchers.IO) {
         db.llmModelDao().insertModels(
             LLMModel(
@@ -163,6 +195,8 @@ class AppDB(
                 path = path,
                 contextSize = contextSize,
                 chatTemplate = chatTemplate,
+                modality = modality,
+                supportsRag = supportsRag,
             ),
         )
     }
