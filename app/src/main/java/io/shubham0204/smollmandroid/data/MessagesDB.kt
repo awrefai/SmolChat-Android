@@ -29,6 +29,7 @@ data class ChatMessage(
     var chatId: Long = 0,
     var message: String = "",
     var isUserMessage: Boolean = false,
+    var attachments: List<StoredAttachment> = emptyList(),
 )
 
 @Dao

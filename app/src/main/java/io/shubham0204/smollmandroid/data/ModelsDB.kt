@@ -31,7 +31,14 @@ data class LLMModel(
     var path: String = "",
     var contextSize: Int = 0,
     var chatTemplate: String = "",
+    var modality: ModelModality = ModelModality.TEXT,
+    var supportsRag: Boolean = false,
 )
+
+enum class ModelModality {
+    TEXT,
+    VISION,
+}
 
 @Dao
 interface LLMModelDao {

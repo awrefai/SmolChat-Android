@@ -21,11 +21,14 @@ import android.app.ActivityManager
 import android.app.ActivityManager.MemoryInfo
 import android.content.Context
 import android.graphics.Color
+import android.net.Uri
 import android.text.util.Linkify
+import android.provider.OpenableColumns
 import android.util.Log
 import android.util.TypedValue
 import androidx.core.content.res.ResourcesCompat
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.Markwon
 import io.noties.markwon.core.CorePlugin
@@ -40,16 +43,23 @@ import io.noties.prism4j.Prism4j
 import io.shubham0204.smollm.SmolLM
 import io.shubham0204.smollmandroid.R
 import io.shubham0204.smollmandroid.data.AppDB
+import io.shubham0204.smollmandroid.data.AttachmentType
 import io.shubham0204.smollmandroid.data.Chat
 import io.shubham0204.smollmandroid.data.ChatMessage
 import io.shubham0204.smollmandroid.data.Folder
+import io.shubham0204.smollmandroid.data.ModelModality
+import io.shubham0204.smollmandroid.data.StoredAttachment
 import io.shubham0204.smollmandroid.llm.ModelsRepository
 import io.shubham0204.smollmandroid.llm.SmolLMManager
+import io.shubham0204.smollmandroid.rag.PdfRagEngine
 import io.shubham0204.smollmandroid.prism4j.PrismGrammarLocator
 import io.shubham0204.smollmandroid.ui.components.createAlertDialog
+import io.shubham0204.smollmandroid.vision.VisionAnalyzer
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import org.koin.android.annotation.KoinViewModel
 import java.util.Date
 import kotlin.math.pow
@@ -79,12 +89,30 @@ sealed class ChatScreenUIEvent {
     }
 }
 
+private sealed class AttachmentMetadata {
+    data class Image(val analysis: VisionAnalyzer.VisionAnalysisResult) : AttachmentMetadata()
+
+    data class Pdf(val knowledgeBase: PdfRagEngine.PdfKnowledgeBase) : AttachmentMetadata()
+}
+
+data class PendingAttachment(
+    val id: Long,
+    val uri: Uri,
+    val type: AttachmentType,
+    val title: String,
+    val preview: String? = null,
+    val metadata: AttachmentMetadata? = null,
+    val isProcessing: Boolean = true,
+)
+
 @KoinViewModel
 class ChatScreenViewModel(
     val context: Context,
     val appDB: AppDB,
     val modelsRepository: ModelsRepository,
     val smolLMManager: SmolLMManager,
+    val visionAnalyzer: VisionAnalyzer,
+    val pdfRagEngine: PdfRagEngine,
 ) : ViewModel() {
     enum class ModelLoadingState {
         NOT_LOADED, // model loading not started
@@ -123,6 +151,9 @@ class ChatScreenViewModel(
 
     private val _showRAMUsageLabel = MutableStateFlow(false)
     val showRAMUsageLabel: StateFlow<Boolean> = _showRAMUsageLabel
+
+    private val _pendingAttachments = MutableStateFlow<List<PendingAttachment>>(emptyList())
+    val pendingAttachments: StateFlow<List<PendingAttachment>> = _pendingAttachments
 
     // Used to pre-set a value in the query text-field of the chat screen
     // It is set when a query comes from a 'share-text' intent in ChatActivity
@@ -217,9 +248,172 @@ class ChatScreenViewModel(
         appDB.deleteMessage(messageId)
     }
 
+    fun addImageAttachment(uri: Uri) {
+        val chat = _currChatState.value ?: return
+        val model = modelsRepository.getModelFromId(chat.llmModelId)
+        if (model == null || model.modality != ModelModality.VISION) {
+            createAlertDialog(
+                dialogTitle = context.getString(R.string.dialog_err_title),
+                dialogText = context.getString(R.string.chat_attachment_image_not_supported),
+                dialogPositiveButtonText = context.getString(R.string.dialog_err_close),
+                onPositiveButtonClick = {},
+                dialogNegativeButtonText = "",
+                onNegativeButtonClick = {},
+            )
+            return
+        }
+        val attachmentId = System.nanoTime()
+        val title = resolveDisplayName(uri) ?: context.getString(R.string.chat_attachment_image_fallback)
+        val placeholder = PendingAttachment(attachmentId, uri, AttachmentType.IMAGE, title)
+        _pendingAttachments.update { it + placeholder }
+        viewModelScope.launch {
+            try {
+                val analysis = visionAnalyzer.analyzeImage(uri)
+                val preview = buildImagePreview(analysis)
+                updateAttachment(attachmentId) {
+                    it.copy(
+                        preview = preview,
+                        metadata = AttachmentMetadata.Image(analysis),
+                        isProcessing = false,
+                    )
+                }
+            } catch (exception: Exception) {
+                _pendingAttachments.update { attachments -> attachments.filterNot { it.id == attachmentId } }
+                showAttachmentError(exception)
+            }
+        }
+    }
+
+    fun addPdfAttachment(uri: Uri) {
+        val attachmentId = System.nanoTime()
+        val title = resolveDisplayName(uri) ?: context.getString(R.string.chat_attachment_document_fallback)
+        val placeholder = PendingAttachment(attachmentId, uri, AttachmentType.DOCUMENT, title)
+        _pendingAttachments.update { it + placeholder }
+        viewModelScope.launch {
+            try {
+                val knowledgeBase = pdfRagEngine.buildKnowledgeBase(uri)
+                val preview =
+                    knowledgeBase.chunks.firstOrNull()?.text?.let { text ->
+                        text.replace("\n", " ").take(160)
+                    }
+                updateAttachment(attachmentId) {
+                    it.copy(
+                        preview = preview ?: context.getString(R.string.chat_attachment_document_ready),
+                        metadata = AttachmentMetadata.Pdf(knowledgeBase),
+                        isProcessing = false,
+                    )
+                }
+            } catch (exception: Exception) {
+                _pendingAttachments.update { attachments -> attachments.filterNot { it.id == attachmentId } }
+                showAttachmentError(exception)
+            }
+        }
+    }
+
+    fun removePendingAttachment(id: Long) {
+        _pendingAttachments.update { attachments -> attachments.filterNot { it.id == id } }
+    }
+
+    fun clearPendingAttachments() {
+        _pendingAttachments.value = emptyList()
+    }
+
+    private fun updateAttachment(
+        id: Long,
+        transform: (PendingAttachment) -> PendingAttachment,
+    ) {
+        _pendingAttachments.update { attachments ->
+            attachments.map { if (it.id == id) transform(it) else it }
+        }
+    }
+
+    private fun buildImagePreview(result: VisionAnalyzer.VisionAnalysisResult): String {
+        val builder = StringBuilder(result.description)
+        if (result.width > 0 && result.height > 0) {
+            builder.append("\n")
+            builder.append(context.getString(R.string.chat_attachment_image_resolution, result.width, result.height))
+        }
+        if (result.dominantColors.isNotEmpty()) {
+            builder.append("\n")
+            builder.append(
+                context.getString(
+                    R.string.chat_attachment_image_colors,
+                    result.dominantColors.joinToString(),
+                ),
+            )
+        }
+        return builder.toString()
+    }
+
+    private fun showAttachmentError(exception: Exception) {
+        createAlertDialog(
+            dialogTitle = context.getString(R.string.dialog_err_title),
+            dialogText =
+                context.getString(
+                    R.string.chat_attachment_error,
+                    exception.message ?: context.getString(R.string.chat_attachment_error_generic),
+                ),
+            dialogPositiveButtonText = context.getString(R.string.dialog_err_close),
+            onPositiveButtonClick = {},
+            dialogNegativeButtonText = "",
+            onNegativeButtonClick = {},
+        )
+    }
+
+    private fun resolveDisplayName(uri: Uri): String? {
+        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            val columnIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (columnIndex >= 0 && cursor.moveToFirst()) {
+                return cursor.getString(columnIndex)
+            }
+        }
+        return null
+    }
+
+    private fun prepareAttachmentForQuery(
+        attachment: PendingAttachment,
+        question: String,
+    ): Pair<StoredAttachment, String>? {
+        if (attachment.isProcessing || attachment.metadata == null) {
+            return null
+        }
+        return when (val metadata = attachment.metadata) {
+            is AttachmentMetadata.Image -> {
+                val detailedSummary =
+                    buildString {
+                        append(context.getString(R.string.chat_attachment_image_heading, attachment.title))
+                        append("\n")
+                        append(buildImagePreview(metadata.analysis))
+                    }
+                StoredAttachment(
+                    type = attachment.type,
+                    uri = attachment.uri.toString(),
+                    title = attachment.title,
+                    summary = detailedSummary,
+                ) to detailedSummary
+            }
+            is AttachmentMetadata.Pdf -> {
+                val ragResult = pdfRagEngine.query(metadata.knowledgeBase, question)
+                val contextBlock =
+                    buildString {
+                        append(context.getString(R.string.chat_attachment_document_heading, attachment.title))
+                        append("\n")
+                        append(ragResult.context)
+                    }
+                StoredAttachment(
+                    type = attachment.type,
+                    uri = attachment.uri.toString(),
+                    title = attachment.title,
+                    summary = contextBlock,
+                ) to contextBlock
+            }
+        }
+    }
+
     fun sendUserQuery(
         query: String,
         addMessageToDB: Boolean = true,
+        persistedAttachments: List<StoredAttachment>? = null,
     ) {
         _currChatState.value?.let { chat ->
             // Update the 'dateUsed' attribute of the current Chat instance
@@ -233,13 +427,49 @@ class ChatScreenViewModel(
                 appDB.deleteMessages(chat.id)
             }
 
+            val attachmentPreparation =
+                if (persistedAttachments != null) {
+                    persistedAttachments to persistedAttachments.buildContextBlock()
+                } else {
+                    if (_pendingAttachments.value.any { it.isProcessing }) {
+                        createAlertDialog(
+                            dialogTitle = context.getString(R.string.dialog_err_title),
+                            dialogText = context.getString(R.string.chat_attachment_processing),
+                            dialogPositiveButtonText = context.getString(R.string.dialog_err_close),
+                            onPositiveButtonClick = {},
+                            dialogNegativeButtonText = "",
+                            onNegativeButtonClick = {},
+                        )
+                        return
+                    }
+                    val prepared =
+                        _pendingAttachments.value.mapNotNull {
+                            prepareAttachmentForQuery(it, query)
+                        }
+                    val stored = prepared.map { it.first }
+                    val contextBlock = prepared.map { it.second }.filter { it.isNotBlank() }
+                    stored to if (contextBlock.isEmpty()) null else contextBlock.joinToString("\n\n")
+                }
+
             if (addMessageToDB) {
-                appDB.addUserMessage(chat.id, query)
+                appDB.addUserMessage(chat.id, query, attachmentPreparation.first)
             }
             _isGeneratingResponse.value = true
             _partialResponse.value = ""
+            val prompt =
+                if (attachmentPreparation.second.isNullOrBlank()) {
+                    query
+                } else {
+                    buildString {
+                        append(query)
+                        append("\n\n")
+                        append(context.getString(R.string.chat_attachment_prompt_header))
+                        append("\n")
+                        append(attachmentPreparation.second)
+                    }
+                }
             smolLMManager.getResponse(
-                query,
+                prompt,
                 responseTransform = {
                     // Replace <think> tags with <blockquote> tags
                     // to get a neat Markdown rendering
@@ -255,6 +485,9 @@ class ChatScreenViewModel(
                     responseGenerationsSpeed = response.generationSpeed
                     responseGenerationTimeSecs = response.generationTimeSecs
                     appDB.updateChat(chat.copy(contextSizeConsumed = response.contextLengthUsed))
+                    if (persistedAttachments == null) {
+                        clearPendingAttachments()
+                    }
                 },
                 onCancelled = {
                     // ignore CancellationException, as it was called because
@@ -428,3 +661,12 @@ class ChatScreenViewModel(
         _showRAMUsageLabel.value = !_showRAMUsageLabel.value
     }
 }
+
+private fun List<StoredAttachment>.buildContextBlock(): String? =
+    if (isEmpty()) {
+        null
+    } else {
+        joinToString(separator = "\n\n") { attachment ->
+            "[Attachment: ${attachment.title}] ${attachment.summary}"
+        }
+    }

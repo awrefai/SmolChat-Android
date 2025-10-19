@@ -86,6 +86,11 @@ dependencies {
     implementation(project(":smollm"))
     implementation(project(":hf-model-hub-api"))
 
+    implementation("io.coil-kt:coil-compose:2.7.0")
+    implementation("androidx.palette:palette-ktx:1.0.0")
+    implementation("com.google.mlkit:image-labeling:17.0.9")
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
+
     // Koin: dependency injection
     implementation(libs.koin.android)
     implementation(libs.koin.annotations)

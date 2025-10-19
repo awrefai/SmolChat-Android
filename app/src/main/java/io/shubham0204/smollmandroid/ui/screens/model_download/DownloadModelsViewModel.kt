@@ -35,6 +35,7 @@ import io.shubham0204.smollmandroid.R
 import io.shubham0204.smollmandroid.data.AppDB
 import io.shubham0204.smollmandroid.data.HFModelsAPI
 import io.shubham0204.smollmandroid.data.LLMModel
+import io.shubham0204.smollmandroid.data.ModelModality
 import io.shubham0204.smollmandroid.ui.components.hideProgressDialog
 import io.shubham0204.smollmandroid.ui.components.setProgressDialogText
 import io.shubham0204.smollmandroid.ui.components.setProgressDialogTitle
@@ -126,12 +127,25 @@ class DownloadModelsViewModel(
                 ggufReader.load(File(context.filesDir, fileName).absolutePath)
                 val contextSize = ggufReader.getContextSize() ?: SmolLM.DefaultInferenceParams.contextSize
                 val chatTemplate = ggufReader.getChatTemplate() ?: SmolLM.DefaultInferenceParams.chatTemplate
+                val normalizedName = fileName.lowercase()
+                val modality =
+                    if (
+                        listOf("vision", "vlm", "llava", "omni").any {
+                            normalizedName.contains(it)
+                        }
+                    ) {
+                        ModelModality.VISION
+                    } else {
+                        ModelModality.TEXT
+                    }
                 appDB.addModel(
                     fileName,
                     "",
                     Paths.get(context.filesDir.absolutePath, fileName).toString(),
                     contextSize.toInt(),
                     chatTemplate,
+                    modality = modality,
+                    supportsRag = true,
                 )
                 withContext(Dispatchers.Main) {
                     hideProgressDialog()
